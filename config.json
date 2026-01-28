@@ -4,7 +4,7 @@
     "leverage": 10,
     "amount": 3.0,
     "target_roe": 2.5,
-    "stop_loss_roe": 5.0,
+    "stop_loss_roe": 5.5,
     "strategy": "ultra_safe"
   },
   {
@@ -12,7 +12,7 @@
     "leverage": 10,
     "amount": 3.0,
     "target_roe": 2.5,
-    "stop_loss_roe": 5.0,
+    "stop_loss_roe": 5.5,
     "strategy": "ultra_safe"
   },
   {
@@ -20,7 +20,7 @@
     "leverage": 10,
     "amount": 3.0,
     "target_roe": 2.5,
-    "stop_loss_roe": 5.0,
+    "stop_loss_roe": 5.5,
     "strategy": "ultra_safe"
   },
   {
@@ -28,7 +28,7 @@
     "leverage": 10,
     "amount": 3.0,
     "target_roe": 2.5,
-    "stop_loss_roe": 5.0,
+    "stop_loss_roe": 5.5,
     "strategy": "ultra_safe"
   },
   {
@@ -36,7 +36,7 @@
     "leverage": 10,
     "amount": 3.0,
     "target_roe": 2.5,
-    "stop_loss_roe": 5.0,
+    "stop_loss_roe": 5.5,
     "strategy": "ultra_safe"
   },
   {
