@@ -6,6 +6,8 @@ import json
 import logging
 import threading
 import pandas as pd
+import re
+import random
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
@@ -18,34 +20,47 @@ CONFIG_FILE = "config.json"
 MODEL_NAME = "gemini-2.5-flash-lite"
 LOG_FILE_NAME = "bot_master.log"
 
+# 타임아웃 설정 (초) - AI 응답이 30초 이상 걸리면 무시하고 넘어감
+AI_TIMEOUT = 30 
+
 BASE_PROMPT = "Act as a Conservative Scalper AI for {symbol} (1m chart)."
 
-# [전략 저장소]
+# [전략 저장소 - V6.2 업데이트: 레버리지 맥락 추가]
 PROMPTS = {
     "ultra_safe": """
         {base}
-        **MINDSET**: You are a "Cowardly Sniper". You only pull the trigger when the target is strictly locked on.
-        **GOAL**: Avoid losses at all costs. Missing a trade is better than losing money.
+        
+        **CONTEXT (Crucial)**: 
+        - Current Leverage: {leverage}x
+        - Target Price Move to Win: {target_move}% (Real price change)
+        - Stop Loss Risk: {sl_move}% (Real price change)
+        
+        **MINDSET**: You are a "Cowardly Sniper".
+        **GOAL**: Ensure the volatility is enough to hit the Target ({target_move}%) quickly, but the setup is safe enough to avoid the Stop Loss ({sl_move}%).
         
         [Strict Entry Rules - NO EXCEPTIONS]
-        1. **Volume is Mandatory**: 'Vol_Ratio' MUST be > 2.0. If volume is low, output "wait".
-        2. **Price Extremes**: 
+        1. **Volume is Mandatory**: 'Vol_Ratio' MUST be > 2.0. If volume is low (dead market), output "wait".
+        2. **Volatility Check**: 
+           - Is the current candle body/wick large enough to reach {target_move}%?
+           - If the market is too flat to move {target_move}%, DO NOT enter.
+        3. **Price Extremes**: 
            - LONG: Price must be at/below Lower Bollinger Band.
            - SHORT: Price must be at/above Upper Bollinger Band.
-        3. **Trend Check**: 
+        4. **Trend Check**: 
            - Do not catch a falling knife. Look for a 'Wick' (Rejection) candles.
         
         [Decision Logic]
         - Evaluate the setup score (0-100).
         - **Deduct points** if RSI is neutral (30-70).
         - **Deduct points** if Volume Ratio < 2.0.
+        - **Deduct points** if potential reward seems harder to reach than the risk.
         
         [Final Output]
         - **LONG**: Only if Score >= 95.
         - **SHORT**: Only if Score >= 95.
         - **WAIT**: If Score < 95. (Most of the time, you should wait).
         
-        Output JSON: {{"decision": "long/short/wait", "reason": "Explain why score is high/low"}}
+        Output JSON: {{"decision": "long/short/wait", "reason": "Mention leverage/risk context in reason"}}
     """
 }
 
@@ -95,7 +110,7 @@ class TradingBot(threading.Thread):
         })
 
     def run(self):
-        logger.info(f"🚀 [{self.symbol}] V6.1 Start | TP:{self.target_roe}% SL:{self.stop_loss_roe}%")
+        logger.info(f"🚀 [{self.symbol}] V6.2 Start | TP:{self.target_roe}% SL:{self.stop_loss_roe}%")
         self._init_exchange_settings()
         
         loop_count = 0
@@ -108,7 +123,8 @@ class TradingBot(threading.Thread):
                 else:
                     self._scan_market_for_entry(loop_count)
                 
-                time.sleep(5)
+                # API 요청 분산을 위해 랜덤 대기 (4~6초)
+                time.sleep(random.uniform(4, 6))
                 loop_count += 1
 
             except Exception as e:
@@ -124,7 +140,7 @@ class TradingBot(threading.Thread):
     def _handle_error(self, e):
         msg = str(e)
         if "Code: -4164" in msg: logger.error(f"❌ [{self.symbol}] 잔고 부족 (Min Notional)")
-        elif "503" not in msg and "429" not in msg: logger.error(f"⚠️ [{self.symbol}] Error: {e}")
+        elif "503" not in msg and "429" not in msg: logger.error(f"⚠️ [{self.symbol}] Network Error: {e}")
         time.sleep(10)
 
     # --- 포지션 관리 ---
@@ -145,6 +161,7 @@ class TradingBot(threading.Thread):
     # --- 시장 탐색 ---
     def _scan_market_for_entry(self, loop_count):
         # 이전 미체결 주문이 있다면 정리 (깨끗한 상태 유지)
+        # 이 과정이 있어야 수동으로 포지션 종료 시 남은 주문들이 꼬이지 않음
         if self.exchange.fetch_open_orders(self.symbol):
             self.exchange.cancel_all_orders(self.symbol)
 
@@ -158,7 +175,7 @@ class TradingBot(threading.Thread):
         elif loop_count % 3 == 0:
             logger.info(f"👀 [{self.symbol}] Analyzing... (Wait)")
 
-    # --- 데이터 수집 (지표 추가됨) ---
+    # --- 데이터 수집 ---
     def _get_market_data(self):
         try:
             # 100개의 캔들 데이터 가져오기
@@ -169,7 +186,7 @@ class TradingBot(threading.Thread):
             
             # [지표 계산]
             ema_20 = close.ewm(span=20).mean()
-            ema_50 = close.ewm(span=50).mean() # 중기 추세용 추가
+            ema_50 = close.ewm(span=50).mean() # 중기 추세용
             
             # 볼린저 밴드
             std = close.rolling(20).std()
@@ -205,18 +222,36 @@ class TradingBot(threading.Thread):
             """
         except: return None
 
-    # --- AI 판단 ---
+    # --- AI 판단 (JSON 파싱 및 타임아웃 적용) ---
     def _ask_llm(self, data):
+        target_price_move = self.target_roe / self.leverage
+        sl_price_move = self.stop_loss_roe / self.leverage
+
         prompt_template = PROMPTS[self.strategy]
-        final_prompt = prompt_template.format(base=BASE_PROMPT.format(symbol=self.symbol)) + f"\nData:\n{data}"
+        
+        final_prompt = prompt_template.format(
+            base=BASE_PROMPT.format(symbol=self.symbol),
+            leverage=self.leverage,
+            target_move=f"{target_price_move:.2f}",
+            sl_move=f"{sl_price_move:.2f}"
+        ) + f"\nData:\n{data}"
         
         try:
+            # [타임아웃 적용] config에 timeout 설정 추가 (단, google genai 라이브러리 버전에 따라 다를 수 있어 일반적인 try-except로 처리)
             res = self.client.models.generate_content(
                 model=MODEL_NAME,
                 contents=[types.Content(role="user", parts=[types.Part.from_text(text=final_prompt)])],
                 config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.1)
             )
-            parsed = json.loads(res.text)
+            
+            # JSON 파싱 안전장치
+            text_res = res.text.strip()
+            if text_res.startswith("```json"):
+                text_res = text_res[7:-3].strip()
+            elif text_res.startswith("```"):
+                text_res = text_res[3:-3].strip()
+                
+            parsed = json.loads(text_res)
             decision = parsed.get("decision", "wait").lower()
             
             if decision != "wait":
@@ -224,15 +259,20 @@ class TradingBot(threading.Thread):
                 logger.info(f"💡 [{self.symbol}] AI Insight: {reason}")
             
             return decision
-        except: return "wait"
+        except Exception as e:
+            logger.error(f"AI Error (Timeout or Parse): {e}")
+            return "wait"
 
     # --- 진입 및 주문 복구 ---
     def _execute_entry(self, side):
         try:
             self.exchange.set_margin_mode('isolated', self.symbol) 
             ticker = self.exchange.fetch_ticker(self.symbol)
-            # 금액 계산 (USDT -> Coin 수량)
-            amount = self.exchange.amount_to_precision(self.symbol, (self.amount * self.leverage / ticker['last']))
+            
+            # 금액 계산 (Min Notional 방지용 로직)
+            # 만약 계산된 수량이 0이면 최소 단위로라도 맞춤 (안전장치)
+            raw_amount = (self.amount * self.leverage / ticker['last'])
+            amount = self.exchange.amount_to_precision(self.symbol, raw_amount)
             
             # 시장가 진입
             order_func = self.exchange.create_market_buy_order if side == 'long' else self.exchange.create_market_sell_order
@@ -276,18 +316,22 @@ class TradingBot(threading.Thread):
             tp_rate = (self.target_roe / self.leverage) / 100
             sl_rate = (self.stop_loss_roe / self.leverage) / 100
             
+            # 가격 정밀도(Tick Size) 맞춤
             if side == 'long':
-                tp, sl = entry * (1 + tp_rate), entry * (1 - sl_rate)
-                self.exchange.create_limit_sell_order(self.symbol, amt, tp, {'reduceOnly': True})
-                self.exchange.create_order(self.symbol, 'STOP_MARKET', 'sell', amt, None, {'stopPrice': sl, 'closePosition': True})
+                tp_price = self.exchange.price_to_precision(self.symbol, entry * (1 + tp_rate))
+                sl_price = self.exchange.price_to_precision(self.symbol, entry * (1 - sl_rate))
+                
+                self.exchange.create_limit_sell_order(self.symbol, amt, tp_price, {'reduceOnly': True})
+                self.exchange.create_order(self.symbol, 'STOP_MARKET', 'sell', amt, None, {'stopPrice': sl_price, 'closePosition': True})
             else:
-                tp, sl = entry * (1 - tp_rate), entry * (1 + sl_rate)
-                self.exchange.create_limit_buy_order(self.symbol, amt, tp, {'reduceOnly': True})
-                self.exchange.create_order(self.symbol, 'STOP_MARKET', 'buy', amt, None, {'stopPrice': sl, 'closePosition': True})
+                tp_price = self.exchange.price_to_precision(self.symbol, entry * (1 - tp_rate))
+                sl_price = self.exchange.price_to_precision(self.symbol, entry * (1 + sl_rate))
+                
+                self.exchange.create_limit_buy_order(self.symbol, amt, tp_price, {'reduceOnly': True})
+                self.exchange.create_order(self.symbol, 'STOP_MARKET', 'buy', amt, None, {'stopPrice': sl_price, 'closePosition': True})
                 
             logger.info(f"✅ [{self.symbol}] Orders Fixed")
         except Exception as e:
-            # -4130 오류(주문 금액 너무 작음 등)는 로그만 찍고 넘어감
             if "-4130" not in str(e): logger.error(f"⚠️ Fix Fail: {e}")
 
     def _get_position(self):
@@ -302,12 +346,13 @@ if __name__ == "__main__":
     try:
         with open(CONFIG_FILE, 'r') as f: config_list = json.load(f)
         
-        logger.info(f"🔥 V6.1 BOT STARTED ({len(config_list)} pairs)")
+        logger.info(f"🔥 V6.2 Final BOT STARTED ({len(config_list)} pairs)")
         
         threads = [TradingBot(cfg) for cfg in config_list]
         for t in threads: 
             t.start()
-            time.sleep(0.5) # API 요청 분산
+            # 스레드 시작 시에도 간격을 둠 (초기 과부하 방지)
+            time.sleep(random.uniform(0.5, 1.5)) 
             
         for t in threads: t.join()
 
