@@ -17,7 +17,7 @@ Google Gemini LLM을 활용하여 정형화된 지표 분석의 한계를 보완
 ## Key Features
 
 ### 1. LLM 기반 맥락 분석 (Context-Aware AI Analysis)
-* **V6.2 업데이트:** 단순 차트 데이터뿐만 아니라 **현재 레버리지(Leverage)와 목표 수익/손절 비율(Real Price Move)**을 AI에게 인지시킵니다.
+* 단순 차트 데이터뿐만 아니라 **현재 레버리지(Leverage)와 목표 수익/손절 비율(Real Price Move)**을 AI에게 인지시킵니다.
 * AI는 "지금 변동성이 목표 수익(0.25%)을 달성할 만큼 충분한가?" 혹은 "손절(0.5%) 위험이 너무 크지 않은가?"를 계산하여 `Long`, `Short`, `Wait`을 판단합니다.
 
 ### 2. 리스크 관리 (Risk Management)
