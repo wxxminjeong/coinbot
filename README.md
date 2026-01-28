@@ -1,5 +1,10 @@
 # Binance Futures AI Trading Bot
 
+![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![Google Gemini](https://img.shields.io/badge/Google%20Gemini-8E75B2?style=for-the-badge&logo=google&logoColor=white)
+![Binance](https://img.shields.io/badge/Binance_Futures-FCD535?style=for-the-badge&logo=binance&logoColor=black)
+![Ubuntu](https://img.shields.io/badge/Ubuntu_Server-E95420?style=for-the-badge&logo=ubuntu&logoColor=white)
+
 **Intel N100 (Ubuntu Server)** 환경에서 24시간 운용되도록 설계된 바이낸스 선물 자동매매 시스템입니다.
 Google Gemini LLM을 활용하여 정형화된 지표 분석의 한계를 보완하고, 시장 상황(거래량, 변동성, 추세)을 종합적으로 해석하여 매매를 수행합니다.
 
@@ -27,14 +32,21 @@ Google Gemini LLM을 활용하여 정형화된 지표 분석의 한계를 보완
 * **Flask Web Dashboard:** 외부에서 접근 가능한 웹 대시보드를 통해 실시간 로그, 수익률(ROI), 포지션 상태를 시각화했습니다.
 * **Ngrok Tunneling:** 별도의 포트포워딩 없이 외부 네트워크에서 안전하게 모니터링 페이지에 접속할 수 있도록 구성했습니다.
 
-## Tech Stack
+## Tech Stack & Environment
 
-* **Language:** Python 3.x
-* **Data Processing:** Pandas (Technical Indicators Calculation)
-* **Exchange API:** CCXT (Binance Futures Async Support)
-* **AI Model:** Google Gemini 2.5 Flash Lite
-* **Server & Process:** Ubuntu Linux, Systemd/PM2
-* **Web Framework:** Flask
+### Core & AI
+![Python](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![Pandas](https://img.shields.io/badge/Pandas-150458?style=for-the-badge&logo=pandas&logoColor=white)
+![Google Gemini](https://img.shields.io/badge/Google%20Gemini%202.5-8E75B2?style=for-the-badge&logo=google&logoColor=white)
+
+### Server & Infra
+![Ubuntu](https://img.shields.io/badge/Ubuntu-E95420?style=for-the-badge&logo=ubuntu&logoColor=white)
+![PM2](https://img.shields.io/badge/PM2-2B037B?style=for-the-badge&logo=pm2&logoColor=white)
+![Ngrok](https://img.shields.io/badge/Ngrok-1F1E37?style=for-the-badge&logo=ngrok&logoColor=white)
+
+### Web & API
+![Flask](https://img.shields.io/badge/Flask-000000?style=for-the-badge&logo=flask&logoColor=white)
+![CCXT](https://img.shields.io/badge/CCXT-121212?style=for-the-badge&logo=github&logoColor=white)
 
 ## Disclaimer
 본 프로젝트는 개인 연구 및 포트폴리오 목적으로 개발되었습니다. 실제 트레이딩에 사용할 경우 발생할 수 있는 금전적 손실에 대한 책임은 사용자 본인에게 있습니다.
