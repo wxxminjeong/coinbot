@@ -6,26 +6,25 @@ import json
 import logging
 import threading
 import pandas as pd
-import re
 import random
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
 # ---------------------------------------------------------
-# [설정 & 상수]
+# [Configuration]
 # ---------------------------------------------------------
 load_dotenv()
 CONFIG_FILE = "config.json"
 MODEL_NAME = "gemini-2.5-flash-lite"
 LOG_FILE_NAME = "bot_master.log"
-
-# 타임아웃 설정
 AI_TIMEOUT = 30 
 
 BASE_PROMPT = "Act as a Conservative Scalper AI for {symbol} (1m chart)."
 
-# [전략 저장소 - V6.7 업데이트: 추격 매수 방지 (Anti-FOMO)]
+# ---------------------------------------------------------
+# [Strategy Prompts]
+# ---------------------------------------------------------
 PROMPTS = {
     "ultra_safe": """
         {base}
@@ -68,7 +67,7 @@ PROMPTS = {
 }
 
 # ---------------------------------------------------------
-# [로그 설정]
+# [Logging Setup]
 # ---------------------------------------------------------
 class AFCLogFilter(logging.Filter):
     def filter(self, record): return "AFC is enabled" not in record.getMessage()
@@ -76,12 +75,12 @@ class AFCLogFilter(logging.Filter):
 logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(message)s', datefmt='%H:%M:%S', handlers=[logging.FileHandler(LOG_FILE_NAME, encoding='utf-8'), logging.StreamHandler()])
 logging.getLogger().handlers[0].addFilter(AFCLogFilter())
 logging.getLogger().handlers[1].addFilter(AFCLogFilter())
-logger = logging.getLogger("V6_BOT")
+logger = logging.getLogger("BOT")
 
 for lib in ["httpx", "httpcore", "google", "urllib3"]: logging.getLogger(lib).setLevel(logging.ERROR)
 
 # ---------------------------------------------------------
-# [봇 클래스]
+# [Trading Bot Class]
 # ---------------------------------------------------------
 class TradingBot(threading.Thread):
     def __init__(self, config):
@@ -111,7 +110,7 @@ class TradingBot(threading.Thread):
         })
 
     def run(self):
-        logger.info(f"🚀 [{self.symbol}] V6.7 Anti-FOMO Start | TP:{self.target_roe}% SL:{self.stop_loss_roe}%")
+        logger.info(f"🚀 [{self.symbol}] Bot Started | TP:{self.target_roe}% SL:{self.stop_loss_roe}%")
         self._init_exchange_settings()
         
         loop_count = 0
@@ -124,6 +123,7 @@ class TradingBot(threading.Thread):
                 else:
                     self._scan_market_for_entry(loop_count)
                 
+                # API Throttling (Random 4-6s)
                 time.sleep(random.uniform(4, 6))
                 loop_count += 1
 
@@ -139,12 +139,13 @@ class TradingBot(threading.Thread):
 
     def _handle_error(self, e):
         msg = str(e)
-        if "Code: -4164" in msg: logger.error(f"❌ [{self.symbol}] 잔고 부족 (Min Notional)")
-        elif "503" not in msg and "429" not in msg: logger.error(f"⚠️ [{self.symbol}] Network: {e}")
+        if "Code: -4164" in msg: logger.error(f"❌ [{self.symbol}] Insufficient Balance (Min Notional)")
+        elif "503" not in msg and "429" not in msg: logger.error(f"⚠️ [{self.symbol}] Network/API Error: {e}")
         time.sleep(10)
 
-    # --- 포지션 관리 ---
+    # --- Position Management ---
     def _handle_active_position(self, position, loop_count):
+        # Check orders every 30s
         if loop_count % 6 == 0:
             self._ensure_orders(position)
             self._log_pnl(position)
@@ -157,8 +158,9 @@ class TradingBot(threading.Thread):
             logger.info(f"{icon} [{self.symbol}] Hold | ROI: {roi:.2f}% | PnL: ${pnl:.4f}")
         except: pass
 
-    # --- 시장 탐색 ---
+    # --- Market Analysis ---
     def _scan_market_for_entry(self, loop_count):
+        # Cancel stale orders before analysis
         if self.exchange.fetch_open_orders(self.symbol):
             self.exchange.cancel_all_orders(self.symbol)
 
@@ -172,7 +174,7 @@ class TradingBot(threading.Thread):
         elif loop_count % 3 == 0:
             logger.info(f"👀 [{self.symbol}] Analyzing... (Wait)")
 
-    # --- 데이터 수집 (이격도 계산 추가) ---
+    # --- Data Collection (Indicators) ---
     def _get_market_data(self):
         try:
             ohlcv = self.exchange.fetch_ohlcv(self.symbol, '1m', limit=100)
@@ -180,34 +182,34 @@ class TradingBot(threading.Thread):
             
             close = df['c']
             
-            # 지표 1: 이평선
+            # 1. Moving Average (Trend)
             ema_20 = close.ewm(span=20).mean()
             ema_50 = close.ewm(span=50).mean()
             
-            # [신규] 이격도 계산 (현재가와 EMA50의 거리 %)
+            # 2. Distance from EMA (Anti-FOMO)
             curr_price = close.iloc[-1]
             curr_ema50 = ema_50.iloc[-1]
             dist_ema = abs(curr_price - curr_ema50) / curr_ema50 * 100
             
-            # 지표 2: 볼린저 밴드
+            # 3. Bollinger Bands (Volatility)
             std = close.rolling(20).std()
             upper = ema_20 + (std * 2)
             lower = ema_20 - (std * 2)
             
-            # 지표 3: RSI
+            # 4. RSI (Relative Strength)
             delta = close.diff()
             gain = delta.where(delta > 0, 0).rolling(14).mean()
             loss = -delta.where(delta < 0, 0).rolling(14).mean()
             rsi = 100 - (100 / (1 + gain/loss))
             
-            # 지표 4: MACD
+            # 5. MACD (Momentum)
             exp12 = close.ewm(span=12, adjust=False).mean()
             exp26 = close.ewm(span=26, adjust=False).mean()
             macd_line = exp12 - exp26
             signal_line = macd_line.ewm(span=9, adjust=False).mean()
             macd_hist = macd_line - signal_line
             
-            # 거래량
+            # 6. Volume Ratio
             vol_ma = df['v'].rolling(20).mean().iloc[-1]
             cur_vol = df['v'].iloc[-1]
             vol_ratio = cur_vol / vol_ma if vol_ma > 0 else 0
@@ -227,7 +229,7 @@ class TradingBot(threading.Thread):
             """
         except: return None
 
-    # --- AI 판단 ---
+    # --- AI Decision ---
     def _ask_llm(self, data):
         target_price_move = self.target_roe / self.leverage
         sl_price_move = self.stop_loss_roe / self.leverage
@@ -248,6 +250,7 @@ class TradingBot(threading.Thread):
                 config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.1)
             )
             
+            # Markdown clean-up
             text_res = res.text.strip()
             if text_res.startswith("```json"):
                 text_res = text_res[7:-3].strip()
@@ -266,7 +269,7 @@ class TradingBot(threading.Thread):
             logger.error(f"AI Error: {e}")
             return "wait"
 
-    # --- 진입 실행 ---
+    # --- Execution ---
     def _execute_entry(self, side):
         try:
             self.exchange.set_margin_mode('isolated', self.symbol) 
@@ -340,7 +343,7 @@ if __name__ == "__main__":
     try:
         with open(CONFIG_FILE, 'r') as f: config_list = json.load(f)
         
-        logger.info(f"🔥 V6.7 Anti-FOMO BOT STARTED ({len(config_list)} pairs)")
+        logger.info(f"🔥 Binance AI Bot Started ({len(config_list)} pairs)")
         
         threads = [TradingBot(cfg) for cfg in config_list]
         for t in threads: 
