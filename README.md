@@ -6,48 +6,38 @@
 ![Ubuntu](https://img.shields.io/badge/Ubuntu_Server-E95420?style=for-the-badge&logo=ubuntu&logoColor=white)
 
 **Intel N100 (Ubuntu Server)** 환경에서 24시간 운용되도록 설계된 바이낸스 선물 자동매매 시스템입니다.
-Google Gemini LLM을 활용하여 정형화된 지표 분석의 한계를 보완하고, 시장 상황(거래량, 변동성, 추세)을 종합적으로 해석하여 매매를 수행합니다.
+기존의 기계적인 알고리즘 매매에 **Google Gemini LLM**의 추론 능력을 더하여, 시장 데이터를 종합적으로 해석하고 매매 의사결정을 내립니다.
 
-## Project Overview
+## 🔄 System Architecture
 
-* **Objective:** 저전력 개인 서버 환경에서의 안정적인 24/7 알고리즘 트레이딩 시스템 구축
-* **Environment:** Intel N100 Mini PC, Ubuntu Linux (Headless)
-* **Core Logic:** 1분봉 데이터 기반의 기술적 지표(RSI, Bollinger Bands, MACD)와 LLM의 추론 능력을 결합한 하이브리드 의사결정
+이 프로젝트의 핵심 로직은 **데이터(Data)와 인공지능(AI)의 협업** 프로세스로 구성됩니다.
 
-## Key Features
+1.  **Data Collection (데이터 수집)**
+    * `CCXT` 라이브러리를 통해 바이낸스 선물 시장의 실시간 가격(OHLCV) 및 거래량 데이터를 수집합니다.
+2.  **Technical Analysis (기술적 분석)**
+    * 수집된 데이터를 바탕으로 이동평균선(EMA), RSI, MACD, 볼린저 밴드 등 주요 보조지표를 실시간으로 계산합니다.
+3.  **AI Reasoning (AI 추론)**
+    * 현재의 차트 데이터, 지표 상태, 시장의 추세 정보를 텍스트 프롬프트로 구성하여 **Google Gemini**에게 전달합니다.
+    * LLM은 단순 수치 비교를 넘어, 현재 상황이 매수(Long) 혹은 매도(Short)에 적합한지 논리적으로 판단합니다.
+4.  **Execution (매매 실행)**
+    * AI의 판단 결과와 리스크 관리 규칙(손절/익절 비율)을 결합하여 최종 주문을 바이낸스 서버로 전송합니다.
 
-### 1. LLM 기반 맥락 분석 (Context-Aware AI Analysis)
-* 단순 차트 데이터뿐만 아니라 **현재 레버리지(Leverage)와 목표 수익/손절 비율(Real Price Move)**을 AI에게 인지시킵니다.
-* AI는 "지금 변동성이 목표 수익(0.25%)을 달성할 만큼 충분한가?" 혹은 "손절(0.5%) 위험이 너무 크지 않은가?"를 계산하여 `Long`, `Short`, `Wait`을 판단합니다.
+## ✨ Key Features
 
-### 2. 리스크 관리 (Risk Management)
-* **격리 모드(Isolated Margin):** 모든 포지션은 격리 모드로 진입하여 개별 포지션의 리스크가 전체 자산으로 전이되는 것을 방지합니다.
-* **진입 필터링:** 'Ultra Safe' 전략을 적용하여 단순 과매도/과매수가 아닌, 평소 대비 2.0배 이상의 거래량(Volume Spike)이 동반된 반전 신호에서만 진입합니다.
+* **Hybrid Decision Making:** 정량적 지표(수학적 계산)와 정성적 분석(LLM의 시장 해석)을 결합한 하이브리드 매매 전략.
+* **24/7 Automation:** 저전력 개인 서버(N100)에서 중단 없이 돌아가는 완전 자동화 시스템.
+* **Real-time Monitoring:** Flask 기반의 웹 대시보드를 통해 실시간 로그 및 포지션 상태 모니터링.
+* **Safety First:** API 에러 처리, 네트워크 재연결, 주문 무결성 검증 등 안정성 확보 로직 내장.
 
-### 3. 주문 무결성 보장 (Order Integrity)
-* 네트워크 불안정이나 서버 재부팅 직후에도 시스템이 현재 보유 중인 포지션과 미체결 주문 상태를 대조합니다.
-* 익절(TP) 또는 손절(SL) 주문이 누락된 경우, 계산된 비율에 맞춰 즉시 주문을 재생성하여 포지션 관리를 자동화했습니다.
-* **API 분산 처리:** 스레드 간 API 호출 간격을 랜덤하게 조절하여 거래소의 Rate Limit(429 Error)를 방지합니다.
+## 🛠️ Tech Stack
 
-### 4. 모니터링 시스템 (Monitoring)
-* **Flask Web Dashboard:** 외부에서 접근 가능한 웹 대시보드를 통해 실시간 로그, 수익률(ROI), 포지션 상태를 시각화했습니다.
-* **Ngrok Tunneling:** 별도의 포트포워딩 없이 외부 네트워크에서 안전하게 모니터링 페이지에 접속할 수 있도록 구성했습니다.
+* **Language:** Python 3.10+
+* **Exchange API:** CCXT (Binance Futures)
+* **AI Model:** Google Gemini 2.5 Flash
+* **Data Processing:** Pandas
+* **Server/Infra:** Ubuntu Server, PM2, Ngrok
+* **Dashboard:** Flask
 
-## Tech Stack & Environment
+## ⚠️ Disclaimer
 
-### Core & AI
-![Python](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white)
-![Pandas](https://img.shields.io/badge/Pandas-150458?style=for-the-badge&logo=pandas&logoColor=white)
-![Google Gemini](https://img.shields.io/badge/Google%20Gemini%202.5-8E75B2?style=for-the-badge&logo=google&logoColor=white)
-
-### Server & Infra
-![Ubuntu](https://img.shields.io/badge/Ubuntu-E95420?style=for-the-badge&logo=ubuntu&logoColor=white)
-![PM2](https://img.shields.io/badge/PM2-2B037B?style=for-the-badge&logo=pm2&logoColor=white)
-![Ngrok](https://img.shields.io/badge/Ngrok-1F1E37?style=for-the-badge&logo=ngrok&logoColor=white)
-
-### Web & API
-![Flask](https://img.shields.io/badge/Flask-000000?style=for-the-badge&logo=flask&logoColor=white)
-![CCXT](https://img.shields.io/badge/CCXT-121212?style=for-the-badge&logo=github&logoColor=white)
-
-## Disclaimer
-본 프로젝트는 개인 연구 및 포트폴리오 목적으로 개발되었습니다. 실제 트레이딩에 사용할 경우 발생할 수 있는 금전적 손실에 대한 책임은 사용자 본인에게 있습니다.
+본 프로젝트는 개인 연구 및 학습 목적으로 개발되었습니다. 가상화폐 투자는 높은 리스크를 수반하며, 본 알고리즘을 사용하여 발생하는 모든 금전적 손실에 대한 책임은 사용자 본인에게 있습니다.
