@@ -7,6 +7,8 @@ import logging
 import threading
 import pandas as pd
 import random
+import re
+from typing import Optional, Dict, List, Any
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
@@ -19,6 +21,9 @@ CONFIG_FILE = "config.json"
 MODEL_NAME = "gemini-2.5-flash-lite"
 LOG_FILE_NAME = "bot_master.log"
 AI_TIMEOUT = 30 
+
+# JSON 파싱을 위한 정규식 미리 컴파일 (성능 최적화)
+JSON_PATTERN = re.compile(r"```json\s*(.*?)\s*```|```\s*(.*?)\s*```", re.DOTALL)
 
 BASE_PROMPT = "Act as a Conservative Scalper AI for {symbol} (1m chart)."
 
@@ -42,7 +47,7 @@ PROMPTS = {
         
         2. **Distance Check (CRITICAL)**:
            - **Don't Chase!** If 'Dist_from_EMA' is > 0.3%, it's too late. Output "wait".
-           - We only enter when price is CLOSE to the EMA50 line (The start of the move).
+           - We only enter when price is CLOSE to the EMA50 line.
 
         3. **Volume & Momentum**: 
            - 'Vol_Ratio' > 2.0.
@@ -83,7 +88,7 @@ for lib in ["httpx", "httpcore", "google", "urllib3"]: logging.getLogger(lib).se
 # [Trading Bot Class]
 # ---------------------------------------------------------
 class TradingBot(threading.Thread):
-    def __init__(self, config):
+    def __init__(self, config: Dict[str, Any]):
         super().__init__()
         self.config = config
         
@@ -116,11 +121,14 @@ class TradingBot(threading.Thread):
         loop_count = 0
         while self.running:
             try:
+                # 1. 포지션 확인 (API Call 1)
                 position = self._get_position()
                 
                 if position:
+                    # 포지션이 있으면 관리 모드
                     self._handle_active_position(position, loop_count)
                 else:
+                    # 포지션이 없으면 탐색 모드
                     self._scan_market_for_entry(loop_count)
                 
                 # API Throttling (Random 4-6s)
@@ -135,102 +143,111 @@ class TradingBot(threading.Thread):
             self.exchange.load_markets()
             self.exchange.set_margin_mode('isolated', self.symbol)
             self.exchange.set_leverage(self.leverage, self.symbol)
-        except: pass
+        except Exception: 
+            pass
 
-    def _handle_error(self, e):
+    def _handle_error(self, e: Exception):
         msg = str(e)
-        if "Code: -4164" in msg: logger.error(f"❌ [{self.symbol}] Insufficient Balance (Min Notional)")
-        elif "503" not in msg and "429" not in msg: logger.error(f"⚠️ [{self.symbol}] Network/API Error: {e}")
+        if "Code: -4164" in msg: 
+            logger.error(f"❌ [{self.symbol}] Insufficient Balance (Min Notional)")
+        elif "503" not in msg and "429" not in msg: 
+            logger.error(f"⚠️ [{self.symbol}] System Error: {e}")
         time.sleep(10)
 
     # --- Position Management ---
-    def _handle_active_position(self, position, loop_count):
-        # Check orders every 30s
+    def _handle_active_position(self, position: Dict, loop_count: int):
+        # 30초마다 주문 상태 점검 (API 절약)
         if loop_count % 6 == 0:
             self._ensure_orders(position)
             self._log_pnl(position)
 
-    def _log_pnl(self, position):
+    def _log_pnl(self, position: Dict):
         try:
             pnl = float(position['unrealizedPnl'])
             roi = (pnl / float(position['initialMargin'])) * 100
             icon = "🔴" if pnl < 0 else "🟢"
             logger.info(f"{icon} [{self.symbol}] Hold | ROI: {roi:.2f}% | PnL: ${pnl:.4f}")
-        except: pass
+        except Exception: 
+            pass
 
-    # --- Market Analysis ---
-    def _scan_market_for_entry(self, loop_count):
-        # Cancel stale orders before analysis
-        if self.exchange.fetch_open_orders(self.symbol):
-            self.exchange.cancel_all_orders(self.symbol)
-
+    # --- Market Analysis (Optimized) ---
+    def _scan_market_for_entry(self, loop_count: int):
+        # [최적화] 무조건 주문 취소하던 로직 제거. 
+        # 데이터를 먼저 보고 진입각이 나올 때만 주문 정리.
+        
         market_data = self._get_market_data()
         if not market_data: return
 
         decision = self._ask_llm(market_data)
         
         if decision in ['long', 'short']:
+            # [최적화] 진입 결정이 났을 때만 미체결 주문 정리 (API 효율성 증대)
+            if self.exchange.fetch_open_orders(self.symbol):
+                self.exchange.cancel_all_orders(self.symbol)
+                
             self._execute_entry(decision)
+            
         elif loop_count % 3 == 0:
             logger.info(f"👀 [{self.symbol}] Analyzing... (Wait)")
 
-    # --- Data Collection (Indicators) ---
-    def _get_market_data(self):
+    # --- Data Collection ---
+    def _get_market_data(self) -> Optional[str]:
         try:
-            ohlcv = self.exchange.fetch_ohlcv(self.symbol, '1m', limit=100)
+            # Fetch 300 candles for EMA200
+            ohlcv = self.exchange.fetch_ohlcv(self.symbol, '1m', limit=300)
             df = pd.DataFrame(ohlcv, columns=['ts', 'o', 'h', 'l', 'c', 'v'])
             
             close = df['c']
             
-            # 1. Moving Average (Trend)
+            # Indicators
             ema_20 = close.ewm(span=20).mean()
             ema_50 = close.ewm(span=50).mean()
+            ema_200 = close.ewm(span=200).mean()
             
-            # 2. Distance from EMA (Anti-FOMO)
             curr_price = close.iloc[-1]
             curr_ema50 = ema_50.iloc[-1]
+            curr_ema200 = ema_200.iloc[-1]
+            
+            # Distance from EMA50
             dist_ema = abs(curr_price - curr_ema50) / curr_ema50 * 100
             
-            # 3. Bollinger Bands (Volatility)
+            # Bollinger Bands
             std = close.rolling(20).std()
             upper = ema_20 + (std * 2)
             lower = ema_20 - (std * 2)
             
-            # 4. RSI (Relative Strength)
+            # RSI
             delta = close.diff()
             gain = delta.where(delta > 0, 0).rolling(14).mean()
             loss = -delta.where(delta < 0, 0).rolling(14).mean()
             rsi = 100 - (100 / (1 + gain/loss))
             
-            # 5. MACD (Momentum)
+            # MACD
             exp12 = close.ewm(span=12, adjust=False).mean()
             exp26 = close.ewm(span=26, adjust=False).mean()
             macd_line = exp12 - exp26
             signal_line = macd_line.ewm(span=9, adjust=False).mean()
             macd_hist = macd_line - signal_line
             
-            # 6. Volume Ratio
+            # Volume Ratio
             vol_ma = df['v'].rolling(20).mean().iloc[-1]
             cur_vol = df['v'].iloc[-1]
             vol_ratio = cur_vol / vol_ma if vol_ma > 0 else 0
             
-            curr = df.iloc[-1]
-            candle_body = abs(curr['c'] - curr['o'])
-            upper_wick = curr['h'] - max(curr['c'], curr['o'])
-            lower_wick = min(curr['c'], curr['o']) - curr['l']
-            
             return f"""
-            Price: {curr['c']}
-            Trends: EMA50={curr_ema50:.4f}
-            Dist_from_EMA: {dist_ema:.3f}% (Must be < 0.3% to enter)
+            Price: {curr_price}
+            Trends: EMA50={curr_ema50:.4f}, EMA200={curr_ema200:.4f}
+            Trend Status: {'BULL' if curr_price > curr_ema200 else 'BEAR'} (EMA200 Base)
+            Dist_from_EMA50: {dist_ema:.3f}% (Limit: 0.3%)
             MACD: Hist={macd_hist.iloc[-1]:.4f}
             RSI(14): {rsi.iloc[-1]:.1f}
             Volume Ratio: {vol_ratio:.2f}x
             """
-        except: return None
+        except Exception: 
+            return None
 
-    # --- AI Decision ---
-    def _ask_llm(self, data):
+    # --- AI Decision (Optimized) ---
+    def _ask_llm(self, data: str) -> str:
         target_price_move = self.target_roe / self.leverage
         sl_price_move = self.stop_loss_roe / self.leverage
 
@@ -250,12 +267,12 @@ class TradingBot(threading.Thread):
                 config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.1)
             )
             
-            # Markdown clean-up
             text_res = res.text.strip()
-            if text_res.startswith("```json"):
-                text_res = text_res[7:-3].strip()
-            elif text_res.startswith("```"):
-                text_res = text_res[3:-3].strip()
+            
+            # [최적화] 정규식으로 JSON 추출 (더 안전하고 빠름)
+            match = JSON_PATTERN.search(text_res)
+            if match:
+                text_res = match.group(1) or match.group(2)
                 
             parsed = json.loads(text_res)
             decision = parsed.get("decision", "wait").lower()
@@ -270,7 +287,7 @@ class TradingBot(threading.Thread):
             return "wait"
 
     # --- Execution ---
-    def _execute_entry(self, side):
+    def _execute_entry(self, side: str):
         try:
             self.exchange.set_margin_mode('isolated', self.symbol) 
             ticker = self.exchange.fetch_ticker(self.symbol)
@@ -291,7 +308,8 @@ class TradingBot(threading.Thread):
         except Exception as e:
             logger.error(f"❌ [{self.symbol}] Entry Fail: {e}")
 
-    def _ensure_orders(self, position):
+    def _ensure_orders(self, position: Dict):
+        # API 과부하 방지 쿨다운
         if time.time() - self.fix_history.get(self.symbol, 0) < 60: return
 
         try:
@@ -331,13 +349,14 @@ class TradingBot(threading.Thread):
         except Exception as e:
             if "-4130" not in str(e): logger.error(f"⚠️ Fix Fail: {e}")
 
-    def _get_position(self):
+    def _get_position(self) -> Optional[Dict]:
         try:
             positions = self.exchange.fetch_positions([self.symbol])
             for p in positions:
                 if float(p['contracts']) != 0: return p
             return None
-        except: return None
+        except Exception: 
+            return None
 
 if __name__ == "__main__":
     try:
